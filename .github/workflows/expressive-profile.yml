@@ -21,3 +21,56 @@ jobs:
       - uses: metawka/expressive-profile@v1
         with:
           token: ${{ secrets.PROFILE_TOKEN || github.token }}
+
+      # Make every dated, inactive calendar cell appear active.
+      # Existing active cells and their contribution levels are left unchanged.
+      - name: Activate inactive calendar days
+        run: |
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          for theme in ("dark", "light"):
+              path = Path(f"assets/stats-{theme}.svg")
+              if not path.exists():
+                  raise SystemExit(f"Missing generated file: {path}")
+
+              svg = path.read_text()
+              cell_re = re.compile(
+                  r'<rect x="(?P<x>[0-9.]+)" y="(?P<y>[0-9.]+)" '
+                  r'width="(?P<w>[0-9.]+)" height="(?P<h>[0-9.]+)" '
+                  r'rx="(?P<rx>[0-9.]+)" fill="(?P<fill>#[0-9a-fA-F]{6})"/>'
+              )
+
+              cells = []
+              for match in cell_re.finditer(svg):
+                  x, y = float(match.group("x")), float(match.group("y"))
+                  if x >= 432 and y >= 136:
+                      cells.append(match)
+
+              if not cells:
+                  raise SystemExit(f"No calendar cells found in {path}")
+
+              inactive = cells[0].group("fill")
+              active = next(
+                  (m.group("fill") for m in cells if m.group("fill").lower() != inactive.lower()),
+                  None,
+              )
+              if active is None:
+                  raise SystemExit(f"Could not detect an active-day color in {path}")
+
+              replacements = 0
+              def activate(match):
+                  nonlocal_dummy = None
+                  global replacements
+                  x, y = float(match.group("x")), float(match.group("y"))
+                  fill = match.group("fill")
+                  if x >= 432 and y >= 136 and fill.lower() == inactive.lower():
+                      replacements += 1
+                      return match.group(0).replace(f'fill="{fill}"', f'fill="{active}"')
+                  return match.group(0)
+
+              updated = cell_re.sub(activate, svg)
+              path.write_text(updated)
+              print(f"{path}: activated {replacements} inactive days")
+          PY
